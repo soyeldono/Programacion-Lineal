@@ -4,106 +4,74 @@ from typing import Any, List, Tuple, Union
 #from typing_extensions import Self
 from dataclasses import dataclass
 
-# primeros pasos aqui
-
-
-
-# class Simplex:
-#     """
-#     El metodo simplex creado por estudiantes de la clase de PL de la ENES Morelia 2022 c:
-#     """
-
-#     def __call__(self, A: np.ndarray, w = False) -> np.ndarray:
-#         self.A = A
-#         n, m = self.A.shape
-#         self.pivotes = []
-#         if w:
-#             self.__calc_w()
-#             self.__simplex()
-#             #elimiar algo (W)
-        
-#         self.__simplex()
-#         print(self)
-
-
-#     def __calc_w(self):
-#         """
-#         Su funcion para calcular la funcion w aqui
-#         """
-#         return None
-
-#     def __condicion_de_paro(self):
-#         return all(elem >= 0 for elem in self.A[-1, :-1])
-#         # return not any(elem < 0 for elem in self.A[-1, :-1])
-
-#     def __es_pivote(self) -> np.ndarray:
-#         """
-#         Su funcion de poner pivote aqui
-
-#         Regresa
-#         -------
-
-#         Una matriz de numpy con las coordenadas donde se encuanta los 1's en formato: [[y1,x1], [y2,x2], ...]
-#         """
-#         xs = np.where(np.sum(self.A, axis=0) == 1)[0]
-#         ys = np.where(self.A[:,xs] == 1)[1]
-#         return np.column_stack((ys,xs))
-
-#     def __sacar_pivote(self):
-#         # sacar el indice mas pequeño de Z
-#         col_index = np.argmin(self.A[-1])
-#         # dividr los indices de la col por el RHS
-#         divisiones = [
-#             rhs / pivote for pivote, rhs in zip(self.A[:-1, col_index], self.A[:-1, -1])
-#         ]
-
-#         fila_index = np.argmin(divisiones)
-
-#         return fila_index, col_index
-
-#     def __operaciones_elementales(self, fila_index: int, col_index: int):
-#         self.A[fila_index, :] /= self.A[fila_index, col_index]
-
-#         for ix, fila in enumerate(self.A):
-#             if ix != fila_index:
-#                 ## revisar el signo del elemento que voy a eliminar
-#                 ##multiplicar por el signo contratio y sumarlo
-#                 signo = 1
-#                 if fila[col_index] >= 0:
-#                     signo = -1
-
-#                 fila += signo * abs(fila[col_index]) * self.A[fila_index, col_index]
-
-#     def __simplex(self):
-#         self.pivotes = self.__es_pivote()
-#         while not self.__condicion_de_paro():
-#             pivote_i, pivote_j = self.__sacar_pivote()
-#             self.__operaciones_elementales(pivote_i, pivote_j)
-#             # self.__intercambio(pivote_i, pivote_j)
-#             self.pivotes = self.__es_pivote()
-
-#     def __repr__(self) -> str:
-#         return " ".join(
-#             f"x_{self.pivotes[i][1] + 1} = {self.A[self.pivotes[i][0]][-1]}"
-#             for i in range(len(self.pivotes))
-#         )
-
 
 class Simplex:
+    def __call__(self, 
+                M: np.ndarray, 
+                z: np.ndarray, 
+                R: List[str], 
+                r: List[str]=None, 
+                dtypes: List[Union[int, float]]=None) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        M: numpy array with size (m,n)
+            Matrix with the variables
 
-    def __call__(self, M: np.ndarray, z: np.ndarray):
+        z: numpy vector
+            function to minimize
+
+        R: list
+            Restriction of each row
+        
+        r: list of tuples (restriccion: str, value: int/float)
+            Restriction of each variable
+
+        dtypes: list
+            dtypes of each variables
+        """
         self.M = M.astype(float) #matriz de las variables
         self.z = z.astype(float) #la funcion a optimizar
-        self.MSimplex = np.append(M, [z], axis=0)
+        self.R = R
+        self.r = r
+        self.dtypes = dtypes
 
+        if len(self.R) != self.M.shape[0]:
+            raise TypeError(f"restrictions and rows must have same size but got: restrictions:{len(self.R)} != rows:{self.M.shape[0]}")
+
+        self.M,self.z = self.lower_bounded_variables(M, z, r)
+
+        self.MSimplex = self.make_simplex()
+
+        self.z = np.append(z, np.zeros(self.MSimplex.shape[1] - self.z.shape[0])) 
+        if not np.all(self.artificial_variables):
+            self.z = -1*self.z
+        self.MSimplex = np.append(self.MSimplex, [self.z], axis=0)
         self.pivots = self.is_pivot()
         self.initial_pivots = copy(self.pivots)
+        self.MSimplex[-1] = self.del_pivots_z()
+
         self.w = self.calculate_w()
         self.MSimplex = np.append(self.MSimplex, [self.w], axis=0)
         self.MSimplex = self.simplex()
-        #self.MSimplex = self.del_w()
+        self.MSimplex = self.del_w()
+        self.MSimplex = self.simplex()
         return self.MSimplex,self.pivots
-        
+    
+
+    def lower_bounded_variables(self, M: np.ndarray, z: np.ndarray, r: List[str]) -> np.ndarray:
+        for k,i in enumerate(r):
+            if i[0] == ">=":
+                M[:,-1] = M[:,k]*i[1]*-1 + M[:,-1]
+                z[-1] = z[k]*i[1]*-1 + z[-1]
+        return M, z
+
+
+    def upper_bounded_variables(self, M, piv, r) -> Tuple[bool,np.ndarray]:
+        if not (self.MSimplex[piv[0],-1] / self.MSimplex[piv[0],piv[1]] <= r[piv[1]][1] and r[piv[1]][0] == "<="):
+            M[:,-1] += M[:,piv[1]]*r[piv[1]][1]*-1
+            M[:, piv[1]] *= -1
+            return False, M
+        return True,M
+    
     
     def is_pivot(self) -> np.ndarray:
         """
@@ -120,61 +88,109 @@ class Simplex:
     
 
     def get_pivot(self) -> Tuple[int,int]:
-        #row_idx = np.argmin(self.MSimplex[:self.M.shape[0], -1] / self.MSimplex[:self.M.shape[0], col_idx])
-        col_idx = np.argmin(self.MSimplex[-1])
+        col_idx = np.argmin(self.MSimplex[-1,:-1])
         a = self.MSimplex[:self.M.shape[0], -1]
         b = self.MSimplex[:self.M.shape[0], col_idx]
-        divs = np.divide(a, b, out=np.full(a.shape, -np.inf), where=b>0)
-        v_idx = np.where(divs >= 0)[0]
-        row_idx = v_idx[divs[v_idx].argmin()]
+        divsp = np.divide(a, b, out=np.full(a.shape, -np.inf), where=b>0)
+        #divsn = np.divide(a-self.r[col_idx][1], b, out=np.full(a.shape, np.inf), where=b<0)
+        #row_idx = np.argmin([divsp.min(),divsn.min()])
+        v_idx = np.where(divsp >= 0)[0]
+        row_idx = v_idx[divsp[v_idx].argmin()]
         return row_idx, col_idx
 
 
-    def stop_condition(self) -> bool:
-        return np.all(self.MSimplex[-1,:-1] >= 0)
-    
-
-    def calculate_w(self) -> np.ndarray:
-        #self.w = copy(self.MSimplex[-1])
-        w = copy(self.MSimplex[-1])
+    def del_pivots_z(self) -> np.ndarray:
+        z = copy(self.MSimplex[-1])
 
         if self.stop_condition():
-            return w
+            return z
 
         for i in self.pivots:
             row = i[0]
             col = i[1]
 
-            #if self.w[col] == 0:
-            if w[col] == 0:
+            if z[col] == 0:
                 continue
 
-            #self.w += self.MSimplex[row] * (self.w[col] / self.MSimplex[row][col] * -1)
-            w += self.MSimplex[row] * (w[col] / self.MSimplex[row][col] * -1) 
+            z += self.MSimplex[row] * (z[col] / self.MSimplex[row,col] * -1) 
 
-        return w
+        return z
+
+
+    def stop_condition(self) -> bool:
+        return np.all(self.MSimplex[-1,:-1].round(8) >= 0)
     
 
+    def calculate_w(self) -> np.ndarray:
+        piv = self.pivots[self.artificial_variables]
+        SR = self.MSimplex[piv[:,0]].sum(axis=0)
+        w = np.zeros(self.MSimplex.shape[1])
+        w[piv[:,1]] = 1
+        return w - SR
+
+
     def del_w(self):
+        if self.MSimplex[-1,-1].round(8) != 0:
+            raise TypeError("Original problem has no feasible solutions")
+
         M = self.MSimplex[:-1]
-        return np.delete(M, self.initial_pivots, axis=1)
+        return np.delete(M, self.initial_pivots[self.artificial_variables,1], axis=1)
+
+    
+    def make_simplex(self):
+        self.artificial_variables = []
+        if self.R[0] == "<=":
+            MS = np.insert(self.M, [self.M.shape[1]-1], np.zeros((self.M.shape[0],1)), axis=1)
+            MS[0,MS.shape[1]-2] = 1
+            self.artificial_variables.append(False)
+            self.r.append(("<=",np.inf))
+        elif self.R[0] == ">=":
+            MS = np.insert(self.M, [self.M.shape[1]-1], np.zeros((self.M.shape[0],1)), axis=1)
+            MS[0,MS.shape[1]-2] = -1
+            MS = np.insert(MS, [MS.shape[1]-1], np.zeros((self.M.shape[0],1)), axis=1)
+            MS[0,MS.shape[1]-2] = 1
+            self.artificial_variables.append(True)
+            self.r.append(("<=",np.inf))
+        elif self.R[0] == "=":
+            MS = np.insert(self.M, [self.M.shape[1]-1], np.zeros((self.M.shape[0],1)), axis=1)
+            MS[0,MS.shape[1]-2] = 1
+            self.artificial_variables.append(True)
+            self.r.append(("<=",np.inf))
+        else:
+            raise TypeError(f"Unkown restriction {self.R[0]}")
+
+        for k,i in enumerate(self.R[1:],start=1):
+            if i == "<=":
+                MS = np.insert(MS, [MS.shape[1]-1], np.zeros((self.M.shape[0],1)), axis=1)
+                MS[k,MS.shape[1]-2] = 1
+                self.artificial_variables.append(False)
+                self.r.append(("<=",np.inf))
+            elif i == ">=":
+                MS = np.insert(MS, [MS.shape[1]-1], np.zeros((self.M.shape[0],1)), axis=1)
+                MS[k,MS.shape[1]-2] = -1
+                MS = np.insert(MS, [MS.shape[1]-1], np.zeros((self.M.shape[0],1)), axis=1)
+                MS[k,MS.shape[1]-2] = 1
+                self.artificial_variables.append(True)
+                self.r.append(("<=",np.inf))
+            elif i == "=":
+                MS = np.insert(MS, [MS.shape[1]-1], np.zeros((self.M.shape[0],1)), axis=1)
+                MS[k,MS.shape[1]-2] = 1
+                self.artificial_variables.append(True)
+                self.r.append(("<=",np.inf))
+            else:
+                raise TypeError(f"Unkown restriction {i}")
+                
+        return MS
 
 
     def make_zeros(self, row: int, col: int) -> np.ndarray:
-        
         MS = copy(self.MSimplex)
         MS[row] /= MS[row, col]
-
-        # self.MSimplex[row] /= self.MSimplex[row, col]
-        #a = self.MSimplex[row]
-        #b = self.MSimplex[row, col]
-        #self.MSimplex[row] = np.divide(a, b, out=np.full(a.shape, np.inf), where=b!=0)
 
         for xi in range(MS.shape[0]):
             if xi == row:
                 continue
                 
-            #self.MSimplex[xi] += self.MSimplex[row] * (self.MSimplex[xi, col] / self.MSimplex[row,col] * -1) 
             MS[xi] += MS[row] * (MS[xi, col] / MS[row,col] * -1) 
 
         return MS
@@ -185,8 +201,16 @@ class Simplex:
         self.pivots = self.is_pivot()
 
         while not self.stop_condition():
-            self.MSimplex = self.make_zeros(*self.get_pivot())
-            #M = self.make_zeros(*self.get_pivot(), MS=M)
+            pivots = self.get_pivot()
+            #suc,self.MSimplex = self.upper_bounded_variables(self.MSimplex, pivots, self.r)
+            #pivots = self.get_pivot()
+
+            #while not suc:
+            #    suc,self.MSimplex = self.upper_bounded_variables(self.MSimplex, pivots, self.r)
+            #    pivots = self.get_pivot()
+
+            
+            self.MSimplex = self.make_zeros(*pivots)
             self.pivots = self.is_pivot()
 
 
@@ -203,11 +227,11 @@ def main(M):
 
 
 if __name__ == "__main__":
-    np.set_printoptions(suppress=True)
+    #np.set_printoptions(suppress=True)
     #matriz_examen = np.array([[4,2,1,0,0,0,24],[5,3,0,-1,1,0,30],[2,0,0,0,0,1,8],[15,6,0,0,0,0,0]])
     #m1 = np.array([[2,1,1,0,120],[1,1,0,1,90],[-80,-50,0,0,0]], dtype=float)
-    M = np.array([[4,2,1,0,0,0,24],[5,3,0,-1,1,0,30],[2,0,0,0,0,1,8]],dtype=np.float64)
-    z = np.array([15,6,0,0,0,0,0],dtype=np.float64)
+    #M = np.array([[4,2,1,0,0,0,24],[5,3,0,-1,1,0,30],[2,0,0,0,0,1,8]],dtype=np.float64)
+    #z = np.array([15,6,0,0,0,0,0],dtype=np.float64)
 
 
     # M = np.array([
@@ -216,11 +240,63 @@ if __name__ == "__main__":
     #              [ 0, 0, -5,  3,  1, -1, 0, 60]],dtype=float)
 
     # z = np.array([-4, 1, 30, -11, -2,  3, 0, 0],dtype=np.float64)
+
+    # M = np.array([
+    #              [3, 2, -1,  0,  0, 1, 0, 0, 60],
+    #              [7, 2,  0, -1,  0, 0, 1, 0, 84 ],
+    #              [3, 6,  0,  0, -1, 0, 0, 1, 72 ]],dtype=np.float16)
+
+    # z = np.array([10,4,  0,  0,  0, 0, 0, 0, 0],dtype=np.float16)
+
+
+    # M = np.array([
+    #              [-1, 2, 1, 1],
+    #              [-1, 0, 2, 4],
+    #              [1, -1, 2, 4]],dtype=float)
+
+    # z = np.array([1,1,1],dtype=float)
+
+    # M = np.array([
+    #              [4, 2, 24],
+    #              [5, 3, 30],
+    #              [2, 0, 8]],dtype=float)
+
+    # z = np.array([15,6,0],dtype=float)
+
+    # M = np.array([
+    #              [3, 2, 60],
+    #              [7, 2, 84],
+    #              [3, 6, 72]],dtype=float)
+
+    # z = np.array([10,4,0],dtype=float)
+
+
+    # M = np.array([
+    #              [11, 6, 66],
+    #              [5, 50, 225]],dtype=float)
+
+    # z = np.array([1,5,0],dtype=float)
+
+    # M = np.array([
+    #              [2.5, 1, 3100],
+    #              [1, 1, 2000],
+    #              [1, 1, 1700]],dtype=float)
+
+    # z = np.array([22,20,0],dtype=float)
+
+    M = np.array([
+                 [2, 2,  1, 2, 5],
+                 [1, 2, -3, 4, 5]],dtype=float)
+
+    z = np.array([10,15,-10,25],dtype=float)
+
+
     simplex = Simplex()
     #simplex(matriz_examen)
-    M,pv = simplex(M,z)
+    M,pv = simplex(M,z,["<=","<="],[("<=",1),("<=",1),("<=",1),("<=",1)])
 
-    print(M.round(1))
+
+    print(M)
     print(pv)
     print(M[pv[:,0],-1])
     
